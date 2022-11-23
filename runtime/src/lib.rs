@@ -279,8 +279,15 @@ impl pallet_template::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 }
 
+parameter_types! {
+	pub const MaxKittyOwned: u32 = 9999;
+}
+
 impl pallet_kitties::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
+	type Currency = Balances;
+	type KittyRandomness = RandomnessCollectiveFlip;
+	type MaxKittyOwned = MaxKittyOwned;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.

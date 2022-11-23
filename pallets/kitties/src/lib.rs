@@ -16,7 +16,7 @@ mod benchmarking;
 
 #[frame_support::pallet]
 pub mod pallet {
-	use frame_support::pallet_prelude::*;
+	use frame_support::{pallet_prelude::*, traits::{Currency, Randomness}};
 	use frame_system::pallet_prelude::*;
 
 	#[pallet::pallet]
@@ -28,6 +28,16 @@ pub mod pallet {
 	pub trait Config: frame_system::Config {
 		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+
+		/// The Currency handler for the kitties pallet
+		type Currency: Currency<Self::AccountId>;
+
+		/// The maximum amount of Kitties a single account can own.
+		#[pallet::constant]
+		type MaxKittyOwned: Get<u32>;
+
+		/// The type of Randomness we want to specify for this pallet.
+		type KittyRandomness: Randomness<Self::Hash, Self::BlockNumber>;
 	}
 
 	// The pallet's runtime storage items.

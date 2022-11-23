@@ -1,6 +1,6 @@
 {
   "name": "Substrate Node Template",
-  "iamge": "paritytech/ci-linux:production",
+  "image": "paritytech/ci-linux:production",
   "settings": {
     "terminal.integrated.defaultProfile.linux": "fish",
     "lldb.executable": "/usr/bin/lldb",

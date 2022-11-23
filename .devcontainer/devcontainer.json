@@ -1,7 +1,6 @@
 {
   "name": "Substrate Node Template",
   "iamge": "paritytech/ci-linux:production",
-  "context": "..",
   "settings": {
     "terminal.integrated.defaultProfile.linux": "fish",
     "lldb.executable": "/usr/bin/lldb",
@@ -23,7 +22,6 @@
     9944,
     9933
   ],
-  "dockerFile": "Dockerfile",
   "features": {
     "ghcr.io/devcontainers/features/docker-from-docker:1": {},
     "ghcr.io/devcontainers/features/rust:1": {},

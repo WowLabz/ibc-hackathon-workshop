@@ -2,19 +2,25 @@
   "name": "Substrate Node template",
   "context": "..",
   "settings": {
-    "terminal.integrated.shell.linux": "/bin/bash",
-    "lldb.executable": "/usr/bin/lldb"
+    "lldb.executable": "/usr/bin/lldb",
+    "editor.formatOnSave": true,
+    "files.exclude": {
+      "**/CODE_OF_CONDUCT.md": true,
+      "**/LICENSE": true
+    }
   },
   "extensions": [
-    "rust-lang.rust",
+    "rust-lang.rust-analyzer",
     "bungcip.better-toml",
     "vadimcn.vscode-lldb",
     "serayuzgur.crates"
   ],
   "forwardPorts": [
     3000,
-    9944
+    9944,
+    9933
   ],
+  "dockerFile": "Dockerfile",
    "features": {
     "ghcr.io/devcontainers/features/docker-from-docker:1": {},
     "ghcr.io/devcontainers/features/rust:1": {},

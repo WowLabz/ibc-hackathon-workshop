@@ -1,5 +1,6 @@
 {
   "name": "Substrate Node Template",
+  "iamge": "paritytech/ci-linux:production",
   "context": "..",
   "settings": {
     "terminal.integrated.defaultProfile.linux": "fish",

@@ -1,5 +1,6 @@
 ## update and install some things we should probably have
 apt update
+sudo apt install --assume-yes protobuf-compiler
 
 ## Install rustup and common components
 rustup update

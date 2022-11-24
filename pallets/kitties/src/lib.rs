@@ -1,0 +1,270 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+
+/// Edit this file to define custom logic or remove it if it is not needed.
+/// Learn more about FRAME and the core library of Substrate FRAME pallets:
+/// <https://docs.substrate.io/reference/frame-pallets/>
+pub use pallet::*;
+
+#[cfg(test)]
+mod mock;
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
+#[frame_support::pallet]
+pub mod pallet {
+	use frame_support::{
+		pallet_prelude::*,
+		traits::{tokens::ExistenceRequirement, Currency, Randomness},
+	};
+	use frame_system::pallet_prelude::*;
+	use scale_info::TypeInfo;
+	use sp_io::hashing::blake2_128;
+
+	#[cfg(feature = "std")]
+	use frame_support::serde::{Deserialize, Serialize};
+
+	type AccountOf<T> = <T as frame_system::Config>::AccountId;
+	type BalanceOf<T> =
+		<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+
+	// Struct for holding Kitty information.
+	#[derive(Clone, Encode, Decode, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+	#[scale_info(skip_type_params(T))]
+	pub struct Kitty<T: Config> {
+		pub dna: [u8; 16],               // Using 16 bytes to represent a kitty DNA
+		pub price: Option<BalanceOf<T>>, // None, assumes not for sale
+		pub gender: Gender,
+		pub owner: AccountOf<T>,
+	}
+
+	// Set Gender type in Kitty struct.
+	#[derive(Clone, Encode, Decode, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+	#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+	pub enum Gender {
+		Male,
+		Female,
+	}
+
+	#[pallet::pallet]
+	#[pallet::generate_store(pub(super) trait Store)]
+	pub struct Pallet<T>(_);
+
+	/// Configure the pallet by specifying the parameters and types on which it depends.
+	#[pallet::config]
+	pub trait Config: frame_system::Config {
+		/// Because this pallet emits events, it depends on the runtime's definition of an event.
+		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+
+		/// The Currency handler for the kitties pallet
+		type Currency: Currency<Self::AccountId>;
+
+		/// The maximum amount of Kitties a single account can own.
+		#[pallet::constant]
+		type MaxKittyOwned: Get<u32>;
+
+		/// The type of Randomness we want to specify for this pallet.
+		type KittyRandomness: Randomness<Self::Hash, Self::BlockNumber>;
+	}
+
+	#[pallet::storage]
+	#[pallet::getter(fn kitty_cnt)]
+	/// Keeps track of the number of Kitties in existence.
+	pub(super) type KittyCnt<T: Config> = StorageValue<_, u64, ValueQuery>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn kitties)]
+	/// Maps the Kitty struct to the Kitty DNA.
+	pub(super) type Kitties<T: Config> = StorageMap<_, Twox64Concat, [u8; 16], Kitty<T>>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn kitties_owned)]
+	/// Tracks the maximum allowed Kitties an account can own.
+	pub(super) type KittiesOwned<T: Config> = StorageMap<
+		_,
+		Twox64Concat,
+		T::AccountId,
+		BoundedVec<[u8; 16], T::MaxKittyOwned>,
+		ValueQuery,
+	>;
+
+	#[pallet::event]
+	#[pallet::generate_deposit(pub(super) fn deposit_event)]
+	pub enum Event<T: Config> {
+		/// A new Kitty was sucessfully created. \[sender, kitty_dna\]
+		Created(T::AccountId, [u8; 16]),
+		/// Kitty price was sucessfully set. \[sender, kitty_id, new_price\]
+		PriceSet(T::AccountId, [u8; 16], Option<BalanceOf<T>>),
+		/// A Kitty was sucessfully transferred. \[from, to, kitty_id\]
+		Transferred(T::AccountId, T::AccountId, [u8; 16]),
+		/// A Kitty was sucessfully bought. \[buyer, seller, kitty_id, bid_price\]
+		Bought(T::AccountId, T::AccountId, [u8; 16], BalanceOf<T>),
+	}
+
+	#[pallet::error]
+	pub enum Error<T> {
+		/// Handles arithemtic overflow when incrementing the Kitty counter.
+		KittyCntOverflow,
+		/// An account cannot own more Kitties than `MaxKittyCount`.
+		ExceedMaxKittyOwned,
+		/// Buyer cannot be the owner.
+		BuyerIsKittyOwner,
+		/// Cannot transfer a kitty to its owner.
+		TransferToSelf,
+		/// Handles checking whether the Kitty exists.
+		NonExistantKitty,
+		/// Handles checking that the Kitty is owned by the account transferring, buying or setting a price for it.
+		NotKittyOwner,
+		/// Ensures the Kitty is for sale.
+		KittyNotForSale,
+		/// Ensures that the buying price is greater than the asking price.
+		KittyBidPriceTooLow,
+		/// Ensures that an account has enough funds to purchase a Kitty.
+		NotEnoughBalance,
+	}
+
+	#[pallet::call]
+	impl<T: Config> Pallet<T> {
+		#[pallet::weight(0)]
+		pub fn create_kitty(origin: OriginFor<T>, price: Option<BalanceOf<T>>) -> DispatchResult {
+			let sender = ensure_signed(origin)?;
+
+			// Generate unique DNA and Gender.
+			let (kitty_gen_dna, gender) = Self::gen_dna();
+
+			// Write new Kitty to storage.
+			let kitty_dna = Self::mint(&sender, kitty_gen_dna, gender, price)?;
+
+			// Logging to the console
+			log::info!("🎈😺 A kitty is born with ID ➡ {:?}.", kitty_dna);
+
+			// Deposit our "Created" event.
+			Self::deposit_event(Event::Created(sender, kitty_dna));
+			Ok(())
+		}
+
+		#[pallet::weight(0)]
+		pub fn buy_kitty(
+			origin: OriginFor<T>,
+			kitty_id: [u8; 16],
+			bid_price: BalanceOf<T>,
+		) -> DispatchResult {
+			let buyer = ensure_signed(origin)?;
+
+			// Check the kitty exists and buyer is not the current kitty owner
+			let kitty = Self::kitties(&kitty_id).ok_or(<Error<T>>::NonExistantKitty)?;
+			ensure!(kitty.owner != buyer, <Error<T>>::BuyerIsKittyOwner);
+
+			// Check the kitty is for sale and the kitty ask price <= bid_price
+			if let Some(ask_price) = kitty.price {
+				ensure!(ask_price <= bid_price, <Error<T>>::KittyBidPriceTooLow);
+			} else {
+				Err(<Error<T>>::KittyNotForSale)?;
+			}
+
+			// Check the buyer has enough free balance
+			ensure!(T::Currency::free_balance(&buyer) >= bid_price, <Error<T>>::NotEnoughBalance);
+
+			// Verify the buyer has the capacity to receive one more kitty
+			let to_owned = <KittiesOwned<T>>::get(&buyer);
+			ensure!(
+				(to_owned.len() as u32) < T::MaxKittyOwned::get(),
+				<Error<T>>::ExceedMaxKittyOwned
+			);
+
+			let seller = kitty.owner.clone();
+
+			// Transfer the amount from buyer to seller
+			T::Currency::transfer(&buyer, &seller, bid_price, ExistenceRequirement::KeepAlive)?;
+
+			// Transfer the kitty from seller to buyer
+			Self::transfer_kitty_to(&kitty_id, &buyer)?;
+
+			Self::deposit_event(Event::Bought(buyer, seller, kitty_id, bid_price));
+
+			Ok(())
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		fn gen_dna() -> ([u8; 16], Gender) {
+			// Create randomness
+			let random = T::KittyRandomness::random(&b"dna"[..]).0;
+
+			// Create randomness payload
+			let payload = (
+				random,
+				<frame_system::Pallet<T>>::extrinsic_index().unwrap_or_default(),
+				<frame_system::Pallet<T>>::block_number(),
+			);
+
+			if random.as_ref()[0] % 2 == 0 {
+				return (payload.using_encoded(blake2_128), Gender::Male);
+			} else {
+				return (payload.using_encoded(blake2_128), Gender::Female);
+			}
+		}
+
+		pub fn mint(
+			owner: &T::AccountId,
+			dna: [u8; 16],
+			gender: Gender,
+			price: Option<BalanceOf<T>>,
+		) -> Result<[u8; 16], Error<T>> {
+			// Create a new object.
+			let kitty = Kitty::<T> {
+				dna: dna.clone(),
+				price,
+				gender: gender.clone(),
+				owner: owner.clone(),
+			};
+
+			// Check if the kitty does not already exist in our storage map
+			ensure!(Self::kitties(&kitty.dna) == None, Error::<T>::NonExistantKitty);
+
+			// Performs this operation first as it may fail
+			let new_cnt = Self::kitty_cnt().checked_add(1).ok_or(Error::<T>::KittyCntOverflow)?;
+
+			// Performs this operation first as it may fail
+			<KittiesOwned<T>>::try_mutate(&owner, |kitty_vec| kitty_vec.try_push(kitty.dna))
+				.map_err(|_| Error::<T>::ExceedMaxKittyOwned)?;
+
+			// Write new Kitty to storage.
+			Kitties::<T>::insert(kitty.dna, kitty);
+			KittyCnt::<T>::put(new_cnt);
+			Ok(dna)
+		}
+
+		pub fn transfer_kitty_to(kitty_id: &[u8; 16], to: &T::AccountId) -> Result<(), Error<T>> {
+			let mut kitty = Self::kitties(&kitty_id).ok_or(<Error<T>>::NonExistantKitty)?;
+
+			let prev_owner = kitty.owner.clone();
+
+			// Remove `kitty_id` from the KittyOwned vector of `prev_kitty_owner`
+			<KittiesOwned<T>>::try_mutate(&prev_owner, |owned| {
+				if let Some(ind) = owned.iter().position(|&id| id == *kitty_id) {
+					owned.swap_remove(ind);
+					return Ok(());
+				}
+				Err(())
+			})
+			.map_err(|_| <Error<T>>::NonExistantKitty)?;
+
+			// Update the kitty owner
+			kitty.owner = to.clone();
+			// Reset the ask price so the kitty is not for sale untill `set_price()` is called
+			// by the current owner.
+			kitty.price = None;
+
+			<Kitties<T>>::insert(kitty_id, kitty);
+
+			<KittiesOwned<T>>::try_mutate(to, |vec| vec.try_push(*kitty_id))
+				.map_err(|_| <Error<T>>::ExceedMaxKittyOwned)?;
+
+			Ok(())
+		}
+	}
+}
